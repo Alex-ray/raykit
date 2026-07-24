@@ -22,6 +22,31 @@ Reviews the PRs you're tagged on, then hands them to **you** to sign off. It:
 pending comments in the browser and hits submit. It never submits a review, never comments as
 you on someone else's PR, and never pushes code — it just gets the draft in front of you.
 
+### `/raykit:draft-pr`
+
+Opens a pull request the way it should be opened. It:
+
+- **always opens the PR as a draft** — never ready, never merged; you promote it yourself,
+- writes a **terse description that says only what the code can't** — the why, the constraints,
+  the non-obvious decisions — never a file-by-file walkthrough or a restatement of the diff,
+- optionally runs a **principal-engineer review round** on the new PR (the same review engine as
+  `review-inbox`), then either **auto-fixes** the findings — committing and re-reviewing until a
+  round comes back clean — or **hands you the insights** as a pending review to act on yourself.
+
+You choose per run whether the AI fixes the findings for you or just surfaces them; either way the
+PR stays a draft until you say otherwise.
+
+Interactive by default. Flags make it non-interactive for headless/scheduled runs — `--auto-fix`
+(review and fix until clean), `--hand-off` (review, pending comments only), `--no-review` (just
+open the draft):
+
+```
+claude -p "/raykit:draft-pr --auto-fix" --permission-mode acceptEdits
+```
+
+`--auto-fix` pushes commits to the branch, but still never undrafts or merges — nothing ships
+without you.
+
 ## Install
 
 ```
