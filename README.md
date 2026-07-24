@@ -36,6 +36,17 @@ Opens a pull request the way it should be opened. It:
 You choose per run whether the AI fixes the findings for you or just surfaces them; either way the
 PR stays a draft until you say otherwise.
 
+Interactive by default. Flags make it non-interactive for headless/scheduled runs — `--auto-fix`
+(review and fix until clean), `--hand-off` (review, pending comments only), `--no-review` (just
+open the draft):
+
+```
+claude -p "/raykit:draft-pr --auto-fix" --permission-mode acceptEdits
+```
+
+`--auto-fix` pushes commits to the branch, but still never undrafts or merges — nothing ships
+without you.
+
 ## Install
 
 ```

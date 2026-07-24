@@ -16,6 +16,21 @@ promote it yourself after review.
 `gh` sometimes fails in a sandbox with a TLS cert error (`OSStatus -26276`). If a `gh` call
 fails that way, rerun it with the sandbox disabled.
 
+## Arguments
+
+Interactive by default: it asks whether to review, then asks fix-vs-hand-off. Flags make it
+non-interactive so it never blocks on a prompt — for headless or scheduled runs:
+
+- `--no-review` — create the draft PR and stop; skip the review round without asking.
+- `--review` — run the review round without asking, then fall to the fix/hand-off choice.
+- `--auto-fix` — implies `--review`; skip the fix-vs-hand-off question and take **Auto-fix**
+  directly (apply → commit → push → re-review, looping until clean). The unattended default.
+- `--hand-off` — implies `--review`; skip the question and take **Hand off** (pending review,
+  no code change).
+
+A flag only removes the corresponding question — every other rule (draft-only, never undraft,
+never merge, never `--no-verify`) still holds.
+
 ## 1. Prepare the branch
 
 - Never commit on the default branch. If `git branch --show-current` is `main`/`master`, cut a
@@ -53,10 +68,11 @@ gh pr create --draft --base <base> --head <branch> --title "<title>" --body "<th
 
 ## 4. Offer the principal review round (optional)
 
-Ask whether to run a principal-engineer review pass on the new PR. If declined, stop after the
-summary.
+Ask whether to run a principal-engineer review pass on the new PR — unless a flag already
+decided (`--no-review` stops here; `--review`/`--auto-fix`/`--hand-off` proceed without asking).
+If declined, stop after the summary.
 
-If yes, review the PR with the bundled workflow (shared with `review-inbox`):
+Review the PR with the bundled workflow (shared with `review-inbox`):
 
 ```
 Workflow({ scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/pr-principal-review.js",
@@ -70,7 +86,7 @@ already terse and in a human voice.
 ## 5. Resolve findings — your choice
 
 Show the findings terse (severity · file:line · one line each) with the recommendation, then ask
-which:
+which — unless a flag already decided (`--auto-fix` → Auto-fix, `--hand-off` → Hand off):
 
 - **Auto-fix** — apply every finding, commit through hooks, push, and **re-run the review round**.
   Loop until a round returns no findings, or 3 rounds (whichever first); report each round's
@@ -88,6 +104,19 @@ correctness/security/tenancy/data-integrity/fail-open/migrations; comment = mino
 One terse recap: the PR URL (draft), the description you wrote, and — if a review ran — what each
 round found and fixed, ending either clean or with the open items handed to you. Never undraft,
 never merge.
+
+## Running it unattended
+
+Pass a mode so it never blocks on a prompt:
+
+```
+claude -p "/raykit:draft-pr --auto-fix" --permission-mode acceptEdits
+```
+
+Unlike `review-inbox` (which only ever posts pending reviews), `--auto-fix` **pushes commits** to
+the PR branch as it resolves findings. It still **never undrafts and never merges** — the PR stays
+a draft you promote — so nothing ships without you, but code does land on the branch. Want an
+unattended run that changes nothing? Use `--hand-off` (pending review only) or `--no-review`.
 
 ## Notes
 
