@@ -8,7 +8,7 @@
     {
       "name": "raykit",
       "source": "./plugins/raykit",
-      "description": "Alexander Ray's personal Claude Code toolkit. Includes review-inbox: principal-engineer review of the PRs you're tagged on, posted as pending reviews you sign off in the browser."
+      "description": "Alexander Ray's personal Claude Code toolkit. Includes review-inbox (principal-engineer review of the PRs you're tagged on, posted as pending reviews you sign off in the browser) and draft-pr (open PRs as drafts with a terse why-only description and an optional principal review + auto-fix loop)."
     }
   ]
 }
