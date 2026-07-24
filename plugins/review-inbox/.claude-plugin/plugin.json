@@ -1,0 +1,10 @@
+{
+  "name": "review-inbox",
+  "description": "Review the PRs you're tagged on: fan-out principal-engineer review scaled to diff size, adversarially verified, posting terse pending reviews plus an approve / request-changes / comment recommendation per PR.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Alexander Ray"
+  },
+  "homepage": "https://github.com/Alex-ray/raykit",
+  "keywords": ["code-review", "github", "pull-requests", "workflow"]
+}
