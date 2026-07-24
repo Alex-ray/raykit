@@ -6,9 +6,9 @@
   "description": "Alexander Ray's personal AI plugins for Claude Code.",
   "plugins": [
     {
-      "name": "review-inbox",
-      "source": "./plugins/review-inbox",
-      "description": "Review the PRs you're tagged on: fan-out principal-engineer review scaled to diff size, adversarially verified, posting terse pending reviews plus an approve / request-changes / comment recommendation per PR."
+      "name": "raykit",
+      "source": "./plugins/raykit",
+      "description": "Alexander Ray's personal Claude Code toolkit. Includes review-inbox: principal-engineer review of the PRs you're tagged on, posted as pending reviews you sign off in the browser."
     }
   ]
 }

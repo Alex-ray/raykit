@@ -1,11 +1,11 @@
 # raykit
 
-Alexander Ray's personal AI plugins for [Claude Code](https://code.claude.com). A
-marketplace repo — install what's useful, ignore the rest.
+Alexander Ray's personal Claude Code toolkit, distributed as a plugin. Install it and its
+tools show up under the `/raykit:` namespace. More get added over time.
 
-## Plugins
+## Tools
 
-### `review-inbox`
+### `/raykit:review-inbox`
 
 Reviews the PRs you're tagged on, then hands them to **you** to sign off. It:
 
@@ -26,22 +26,19 @@ you on someone else's PR, and never pushes code — it just gets the draft in fr
 
 ```
 /plugin marketplace add Alex-ray/raykit
-/plugin install review-inbox@raykit
+/plugin install raykit@raykit
 /reload-plugins
 ```
 
-Then run it by asking Claude to **"review my PRs"** / **"check my review queue"** (or the
-namespaced skill `/review-inbox:review-inbox`).
+Then run `/raykit:review-inbox` (or just ask Claude to "review my PRs").
 
 ## Requirements
 
-- [`gh`](https://cli.github.com) authenticated as you (`gh auth login`). The plugin uses it
-  to discover PRs, read diffs, and post pending reviews.
-- macOS for the auto-open step (uses `open`); on other platforms the PR URLs are printed
-  instead.
+- [`gh`](https://cli.github.com) authenticated as you (`gh auth login`). Used to discover PRs,
+  read diffs, and post pending reviews.
+- macOS for the auto-open step (uses `open`); on other platforms the PR URLs are printed instead.
 
 ## Safety
 
-The plugin only ever creates **pending** reviews (visible to you alone) and opens them for
-your review. It never submits a review, never comments as you on someone else's PR, and never
-pushes code.
+Tools here only ever create **pending** reviews (visible to you alone) and open them for your
+review. Nothing is submitted, no comments are posted as you on others' PRs, and no code is pushed.

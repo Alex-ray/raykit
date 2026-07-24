@@ -5,7 +5,7 @@ description: >
   the current user is a requested reviewer (across all repos), runs the principal-engineer
   review workflow (depth scaled to size, adversarially verified), posts a terse, human-voice
   PENDING review per PR (author-only — never submitted), and notifies with an
-  approve / request-changes / comment recommendation. Trigger: "review my PRs",
+  approve / request-changes / comment recommendation. Trigger: "/raykit:review-inbox", "review my PRs",
   "check my review queue", or on a schedule.
 ---
 

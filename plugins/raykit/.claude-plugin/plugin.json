@@ -1,0 +1,10 @@
+{
+  "name": "raykit",
+  "description": "Alexander Ray's personal Claude Code toolkit. Skill review-inbox: principal-engineer review of your PR review queue, posted as pending reviews to sign off in the browser.",
+  "version": "0.2.0",
+  "author": {
+    "name": "Alexander Ray"
+  },
+  "homepage": "https://github.com/Alex-ray/raykit",
+  "keywords": ["toolkit", "code-review", "github", "pull-requests", "workflow"]
+}
