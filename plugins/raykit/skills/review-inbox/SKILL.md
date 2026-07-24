@@ -27,10 +27,13 @@ call fails that way, rerun it with the sandbox disabled.
 ## 1. Discover the queue
 
 ```
-gh search prs --review-requested=@me --state=open --json number,title,isDraft,repository
+gh search prs --review-requested=@me --state=open --archived=false --json number,title,isDraft,repository
 ```
 
+- `--archived=false` excludes PRs from archived repos — they're read-only, so you can't act on
+  them (this is a common source of never-clearing queue noise).
 - Drop any `isDraft: true`.
+- Skip any repo on your ignore-list (see Notes).
 - For each remaining PR, get size + head:
   `gh pr view <n> --repo <owner/repo> --json additions,changedFiles,headRefName,mergeStateStatus`
 
@@ -116,6 +119,8 @@ submit anything. If nothing was eligible, send nothing (or a quiet "review queue
 
 ## Notes
 
-- Scope is cross-repo by default. To ignore a repo, skip it in step 1.
+- Scope is cross-repo by default. Archived repos are already excluded via `--archived=false`.
+  To also ignore specific *active* repos, keep a short ignore-list of `owner/name`s and drop them
+  in step 1.
 - Requires `gh` authenticated as the reviewing user.
 - Never `--no-verify`, never submit reviews, never post to PR authors.

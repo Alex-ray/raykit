@@ -1,7 +1,7 @@
 {
   "name": "raykit",
   "description": "Alexander Ray's personal Claude Code toolkit. Skill review-inbox: principal-engineer review of your PR review queue, posted as pending reviews to sign off in the browser.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "Alexander Ray"
   },
