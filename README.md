@@ -1,4 +1,4 @@
- B# raykit
+# raykit
 
 Alexander James Ray's personal Claude Code toolkit, distributed as a plugin. Install it and its
 tools show up under the `/raykit:` namespace. More get added over time.
