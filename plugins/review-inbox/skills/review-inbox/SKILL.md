@@ -84,7 +84,19 @@ gh api --method POST repos/<owner/repo>/pulls/<n>/reviews --input payload.json
   and note it in the summary; don't retry.
 - Only one pending review per PR is allowed; the step-2 guard prevents duplicates.
 
-## 5. Notify
+## 5. Open the reviewed PRs for the human to sign off
+
+This is the critical step — the AI only drafts; a human reviews the pending comments in the
+browser and submits. For every PR that got a pending review, open its **Files changed** view
+(where inline comments render) in the default browser:
+
+```
+open "https://github.com/<owner/repo>/pull/<n>/files"     # macOS
+```
+
+On non-macOS, print the URLs instead. Skip PRs that were skipped or blocked (e.g. locked).
+
+## 6. Notify
 
 Send one push notification summarizing the run, then also print the same summary:
 
