@@ -2,13 +2,14 @@ export const meta = {
   name: 'pr-principal-review',
   description: 'Principal-engineer review of one or more PRs, depth scaled to diff size, adversarially verified, returning terse human-voice comments + an approve/request-changes/comment recommendation per PR',
   phases: [
+    { title: 'Context', detail: 'what each PR is for' },
     { title: 'Review' },
     { title: 'Verify' },
   ],
 }
 
 // args: array of PR objects: [{ number, repo, additions, files, title }]
-// Returns: [{ pr, repo, recommendation, summary, comments:[{path,line,body}], bodyOnly:[{body}] }]
+// Returns: [{ pr, repo, brief, recommendation, summary, comments:[{path,line,body}], bodyOnly:[{body}] }]
 
 const PRS = Array.isArray(args) ? args : (args && args.prs) || []
 if (!PRS.length) return { error: 'no PRs passed in args', prs: [] }
@@ -33,6 +34,17 @@ const FINDINGS_SCHEMA = {
         },
       },
     },
+  },
+}
+const BRIEF_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  required: ['purpose', 'mechanism', 'ticket', 'affects', 'gaps'],
+  properties: {
+    purpose: { type: 'string', description: 'the problem this PR solves and why it exists — plain language, no diff restatement, 1-2 sentences' },
+    mechanism: { type: 'string', description: 'how it solves it — the approach, 1-2 sentences' },
+    ticket: { type: 'string', description: 'ticket/issue key + URL if discoverable from the title, branch, body or commits; empty string if none' },
+    affects: { type: 'string', description: 'which surface/users this touches and what breaks for them if it is wrong — one sentence' },
+    gaps: { type: 'string', description: 'anything the description claims that the diff does not do, or context only the author has; empty string if none' },
   },
 }
 const VERDICT_SCHEMA = {
@@ -87,6 +99,25 @@ For each finding, write the \`comment\` field as the actual inline comment to po
 You are read-only. Do not modify files. Return via the structured tool.`
 }
 
+function briefPrompt(pr) {
+  return `Explain what PR #${pr.number} in ${pr.repo} ("${pr.title || ''}") is FOR, so a reviewer who has never seen this work can orient in ten seconds.
+
+Read the intent, not just the code:
+- Metadata:  gh pr view ${pr.number} --repo ${pr.repo} --json title,body,baseRefName,headRefName,author,labels
+- Commits:   gh pr view ${pr.number} --repo ${pr.repo} --json commits
+- Diff:      gh pr diff ${pr.number} --repo ${pr.repo}
+- If the title, branch, body or commits reference a ticket (e.g. ABC-123, #456), follow it: try any
+  issue-tracker tools available to you (search for them first), else \`gh issue view\`, and pull the
+  stated problem. Leave \`ticket\` empty rather than guessing a URL.
+
+Write for someone deciding how hard to look at this, in plain language. Do NOT restate the diff or
+list changed files — the reviewer can read those. Say what problem exists in the world, why this
+change is the answer, and what it puts at risk. If the PR body is thin or contradicts the diff, say
+so in \`gaps\` — that's the most useful thing you can surface.
+
+You are read-only. Do not modify files. Return via the structured tool.`
+}
+
 function verifyPrompt(pr, f) {
   return `Adversarially verify one review finding against the ACTUAL code of PR #${pr.number} in ${pr.repo}. Try to REFUTE it.
 
@@ -110,12 +141,14 @@ const results = await pipeline(
   PRS,
   async (pr) => {
     const dims = DIMENSIONS[depthFor(pr)]
-    const passes = await parallel(
-      dims.map((d) => () =>
+    // the brief runs alongside the review passes, so it costs no wall-clock
+    const [brief, ...passes] = await parallel([
+      () => agent(briefPrompt(pr), { label: `context #${pr.number}`, phase: 'Context', schema: BRIEF_SCHEMA }),
+      ...dims.map((d) => () =>
         agent(reviewPrompt(pr, d), { label: `review #${pr.number}:${d.key}`, phase: 'Review', effort: 'high', schema: FINDINGS_SCHEMA })
           .then((r) => (r && r.findings) || [])
-      )
-    )
+      ),
+    ])
     // dedup by file:line
     const seen = new Set()
     const findings = passes.filter(Boolean).flat().filter((f) => {
@@ -123,9 +156,9 @@ const results = await pipeline(
       if (seen.has(k)) return false
       seen.add(k); return true
     })
-    return { pr, findings }
+    return { pr, brief, findings }
   },
-  async ({ pr, findings }) => {
+  async ({ pr, brief, findings }) => {
     const hi = findings.filter((f) => f.severity === 'critical' || f.severity === 'high')
     const verified = await parallel(
       hi.map((f) => () =>
@@ -142,6 +175,7 @@ const results = await pipeline(
     const counts = ['critical', 'high', 'medium', 'low'].map((s) => `${kept.filter((f) => f.severity === s).length} ${s}`).filter((x) => !x.startsWith('0')).join(', ')
     return {
       pr: pr.number, repo: pr.repo, title: pr.title,
+      brief: brief || null,
       recommendation: rec,
       summary: kept.length ? `${counts} — inline.` : 'Looks good.',
       comments: kept.map((f) => ({ path: f.file, line: f.line, body: f.comment, severity: f.severity })),
