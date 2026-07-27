@@ -2,19 +2,28 @@ export const meta = {
   name: 'pr-principal-review',
   description: 'Principal-engineer review of one or more PRs, depth scaled to diff size, adversarially verified, returning terse human-voice comments + an approve/request-changes/comment recommendation per PR',
   phases: [
-    { title: 'Context', detail: 'what each PR is for' },
+    { title: 'Context', detail: 'what each PR is for + what the last round asked' },
     { title: 'Review' },
     { title: 'Verify' },
+    { title: 'Summarize' },
   ],
 }
 
 // args: array of PR objects: [{ number, repo, additions, files, title }]
-// Returns: [{ pr, repo, brief, recommendation, summary, comments:[{path,line,body}], bodyOnly:[{body}] }]
+//       or { prs: [...], findings: { "<pr number>": [ ...precomputed findings... ] } }
+//         — pass `findings` to re-use an earlier run's review passes and only redo the
+//           prior-round triage / dedupe / summary stages.
+// Returns: [{ pr, repo, brief, recommendation, summary, body,
+//             comments:[{path,line,body,severity}], replies:[{thread_id,body,resolve,status,gist}],
+//             dropped:[{comment,thread_id,reason}], bodyOnly:[] }]
 
 const PRS = Array.isArray(args) ? args : (args && args.prs) || []
 if (!PRS.length) return { error: 'no PRs passed in args', prs: [] }
+const PRECOMPUTED = (!Array.isArray(args) && args && args.findings) || {}
 
 const STYLE = `Write every comment the way a senior engineer drops an inline note: direct, minimal, human — indistinguishable from a person. State the concern in as few words as convey it, add the fix only if it isn't obvious. No severity labels, no "Failure:/Fix:" scaffolding, no preamble, and NEVER any footer about being automated or AI-generated. One to two sentences. Reference the exact symbol/line inline (it's already anchored).`
+
+const BODY_STYLE = `Same voice as the inline comments: direct, minimal, human — indistinguishable from a person. No headings, no severity labels, no preamble, no sign-off, and NEVER any footer about being automated or AI-generated. Prose, not bullets, unless there are genuinely 3+ unrelated clusters. 2-5 sentences.`
 
 const FINDINGS_SCHEMA = {
   type: 'object', additionalProperties: false,
@@ -46,6 +55,50 @@ const BRIEF_SCHEMA = {
     affects: { type: 'string', description: 'which surface/users this touches and what breaks for them if it is wrong — one sentence' },
     gaps: { type: 'string', description: 'anything the description claims that the diff does not do, or context only the author has; empty string if none' },
   },
+}
+const PRIOR_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  required: ['threads'],
+  properties: {
+    threads: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['thread_id', 'path', 'gist', 'status', 'reply', 'resolve'],
+        properties: {
+          thread_id: { type: 'string', description: 'the GraphQL node id (PRRT_…) of the review thread' },
+          path: { type: 'string' },
+          gist: { type: 'string', description: 'one line: what the original comment asked for' },
+          status: { type: 'string', enum: ['fixed', 'partial', 'not_fixed', 'stale'] },
+          reply: { type: 'string', description: 'the reply to stage on the thread, in the house voice; empty string to say nothing' },
+          resolve: { type: 'boolean', description: 'true only when status is fixed' },
+        },
+      },
+    },
+  },
+}
+const DEDUPE_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  required: ['duplicates'],
+  properties: {
+    duplicates: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['index', 'thread_id', 'reason'],
+        properties: {
+          index: { type: 'number', description: 'index into the candidate findings array' },
+          thread_id: { type: 'string', description: 'the existing thread that already covers it' },
+          reason: { type: 'string' },
+        },
+      },
+    },
+  },
+}
+const BODY_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  required: ['body'],
+  properties: { body: { type: 'string', description: 'the submit-ready review body' } },
 }
 const VERDICT_SCHEMA = {
   type: 'object', additionalProperties: false,
@@ -118,6 +171,114 @@ so in \`gaps\` — that's the most useful thing you can surface.
 You are read-only. Do not modify files. Return via the structured tool.`
 }
 
+function priorPrompt(pr) {
+  return `PR #${pr.number} in ${pr.repo} may be a RE-REVIEW. Work out what your own previous round asked for and which of it the author actually did.
+
+1. Who you are:  ME=$(gh api user -q .login)
+2. Pull every review thread with its node id and resolution state:
+
+gh api graphql -f query='{repository(owner:"OWNER",name:"REPO"){pullRequest(number:${pr.number}){
+  reviewThreads(first:100){nodes{ id isResolved isOutdated path line
+    comments(first:20){nodes{ databaseId author{login} createdAt body }}}}}}}'
+
+   (split ${pr.repo} into OWNER/REPO). Keep ONLY threads whose FIRST comment is authored by ME —
+   those are your findings. Ignore other reviewers' threads and bot threads entirely.
+
+3. Skip a thread if you already replied after the author's last comment on it — you handled that
+   in a previous round and must not ack it twice. Return nothing for those.
+
+4. For each remaining thread, read the CURRENT code and judge what happened. The author resolving a
+   thread is a claim, not evidence — verify it:
+   gh api "repos/${pr.repo}/contents/<path>?ref=$(gh pr view ${pr.number} --repo ${pr.repo} --json headRefName -q .headRefName)" -q .content | base64 -d
+   Read the author's replies too (they often explain a deliberate deferral).
+
+   - fixed      — the concern is genuinely gone in the current code. \`resolve\`: true.
+   - partial    — they changed something but the defect survives, or the fix introduced a new one
+                  (e.g. the guard you asked for exists but uses the wrong predicate). \`resolve\`: false.
+                  \`reply\` must say concretely what still breaks. This is the highest-value case.
+   - not_fixed  — untouched, or they replied "later" without changing it. \`resolve\`: false.
+   - stale      — the code it referred to is gone or the point is moot. \`reply\`: "", \`resolve\`: false.
+
+5. Write \`reply\` as the actual comment to stage on that thread. ${STYLE} For \`fixed\`, one short
+   line confirming it — no praise inflation, no restating their own fix back at them. Never claim
+   something is fixed that you could not verify in the code; call that \`partial\` instead.
+
+You are read-only. Do not modify files or post anything. Return via the structured tool.`
+}
+
+function dedupePrompt(pr, prior, findings) {
+  return `Re-review hygiene for PR #${pr.number} in ${pr.repo}: drop candidate findings that your previous round already raised, so this round posts only what's NEW.
+
+Existing threads from your last round (already being replied to on the thread itself):
+${JSON.stringify(prior.map((t) => ({ thread_id: t.thread_id, path: t.path, status: t.status, gist: t.gist })), null, 1)}
+
+Candidate findings from this round:
+${JSON.stringify(findings.map((f, i) => ({ index: i, file: f.file, line: f.line, comment: f.comment })), null, 1)}
+
+Mark a candidate as a duplicate when it is the SAME underlying defect as an existing thread, even if
+the line moved or the wording differs — the author will read the thread reply instead, and a second
+copy on a new line is noise.
+
+Do NOT mark it a duplicate when it is a genuinely different defect that merely lives in the same
+function or was introduced by their attempted fix. Those are the findings a re-review exists to
+surface; losing them is worse than a little redundancy. When torn, keep it (omit it from the list).
+
+Read the code if you need to tell the two apart. Return only the duplicates.`
+}
+
+function bodyPrompt(pr, rec, kept, prior) {
+  const acked = prior.filter((t) => t.status === 'fixed')
+  const open = prior.filter((t) => t.status === 'partial' || t.status === 'not_fixed')
+  return `Write the review body for PR #${pr.number} in ${pr.repo} — the text that lands in GitHub's
+"Finish your review" box. It gets submitted as-is, so write it to be sendable with no editing.
+
+WHAT THIS TEXT IS FOR — hold to this, it's the whole spec:
+The body is the overview of the review you are submitting. Its job is to tell the author what the
+inline comments ADD UP TO, and to carry the things that have no line to sit on. That's it.
+
+Belongs in the body:
+- the verdict, and what it would take to clear it
+- the pattern across the findings — one root assumption, one repeated omission, one theme
+- anything that isn't anchorable: a missing file, work that isn't in the diff, a description that
+  contradicts the code, coverage that went down, a cross-cutting design concern
+- on a re-review, the state of the previous round
+
+Does NOT belong in the body:
+- anything that could have been an inline comment. If it names a specific line and could be
+  anchored there, it is an inline comment — it is ALREADY posted as one, and repeating it here
+  makes the author read it twice. Do not restate, summarize, or list the individual findings.
+- counts and severity tallies (the reviewer sees those; the author doesn't need them)
+- praise padding, next steps, or anything performative
+
+Recommendation: ${rec.replace('_', ' ')}
+New findings this round (${kept.length}), already posted inline:
+${JSON.stringify(kept.map((f) => ({ severity: f.severity, file: f.file, line: f.line, comment: f.comment })), null, 1)}
+${prior.length ? `
+This is a re-review. Confirmed fixed since last round (${acked.length}): ${JSON.stringify(acked.map((t) => t.gist))}
+Still open from last round (${open.length}): ${JSON.stringify(open.map((t) => ({ status: t.status, gist: t.gist })))}` : `
+This is a FIRST review — you have no earlier threads on this PR. Credit nothing as "fixed",
+"addressed", or "in", and do not thank them for changes: you have no record of asking for any. The
+PR description may describe responding to review elsewhere; that is not your round and you have not
+verified it. Write it as a first look, full stop.`}
+
+Rules:
+- Open with the verdict in your own words — GitHub cannot preselect the approve/request-changes
+  radio, so the body has to carry it. One short line.
+- If and only if this is a re-review, credit what got fixed BEFORE the new problems, in one line,
+  aggregate ("all five from last round are in — one guard landed with the wrong predicate, see the
+  thread"). Do not enumerate what's already visible on the threads. Never credit a fix that isn't
+  in the confirmed-fixed list above, and never credit one whose defect the new findings still
+  report — that contradiction is worse than saying nothing.
+- Then the shape of what's new: the pattern the findings share, not a list of them. They're inline;
+  the body says why they add up to this verdict. If the findings share no pattern, say that plainly
+  and stop — a short body is correct, padding it is not.
+- The inline comments are given to you above ONLY so you can characterize them. Naming one or two as
+  the clearest instance of a shared pattern is fine; walking the list is not.
+- ${BODY_STYLE}
+
+Return via the structured tool.`
+}
+
 function verifyPrompt(pr, f) {
   return `Adversarially verify one review finding against the ACTUAL code of PR #${pr.number} in ${pr.repo}. Try to REFUTE it.
 
@@ -128,12 +289,13 @@ Read the real code (gh pr diff ${pr.number} --repo ${pr.repo}; gh api "repos/${p
 
 const SUBSTANTIVE = /correct|security|tenan|authz|authoriz|integrity|idempot|concurr|durab|event|silent|swallow|fail.?loud|fail.?open|injection|ssrf|leak|provenance|data.?loss|migration/i
 
-function recommend(findings) {
-  const sev = (s) => findings.some((f) => f.severity === s)
+function recommend(findings, prior) {
+  const all = [...findings, ...prior.filter((t) => t.status === 'partial' || t.status === 'not_fixed').map((t) => ({ severity: 'medium', category: 'unresolved', comment: t.gist }))]
+  const sev = (s) => all.some((f) => f.severity === s)
   if (sev('critical') || sev('high')) return 'request_changes'
-  const substantiveMed = findings.some((f) => f.severity === 'medium' && SUBSTANTIVE.test(`${f.category} ${f.comment}`))
+  const substantiveMed = all.some((f) => f.severity === 'medium' && SUBSTANTIVE.test(`${f.category} ${f.comment}`))
   if (substantiveMed) return 'request_changes'
-  if (findings.length) return 'comment'
+  if (all.length) return 'comment'
   return 'approve'
 }
 
@@ -141,44 +303,69 @@ const results = await pipeline(
   PRS,
   async (pr) => {
     const dims = DIMENSIONS[depthFor(pr)]
-    // the brief runs alongside the review passes, so it costs no wall-clock
-    const [brief, ...passes] = await parallel([
+    const pre = PRECOMPUTED[String(pr.number)]
+    // brief + prior-round triage run alongside the review passes, so they cost no wall-clock
+    const [brief, prior, ...passes] = await parallel([
       () => agent(briefPrompt(pr), { label: `context #${pr.number}`, phase: 'Context', schema: BRIEF_SCHEMA }),
-      ...dims.map((d) => () =>
+      () => agent(priorPrompt(pr), { label: `prior round #${pr.number}`, phase: 'Context', effort: 'high', schema: PRIOR_SCHEMA }),
+      ...(pre ? [] : dims.map((d) => () =>
         agent(reviewPrompt(pr, d), { label: `review #${pr.number}:${d.key}`, phase: 'Review', effort: 'high', schema: FINDINGS_SCHEMA })
           .then((r) => (r && r.findings) || [])
-      ),
+      )),
     ])
     // dedup by file:line
     const seen = new Set()
-    const findings = passes.filter(Boolean).flat().filter((f) => {
+    const findings = (pre || passes.filter(Boolean).flat()).filter((f) => {
       const k = `${f.file}:${f.line}`
       if (seen.has(k)) return false
       seen.add(k); return true
     })
-    return { pr, brief, findings }
+    return { pr, brief, prior: (prior && prior.threads) || [], findings }
   },
-  async ({ pr, brief, findings }) => {
+  async ({ pr, brief, prior, findings }) => {
     const hi = findings.filter((f) => f.severity === 'critical' || f.severity === 'high')
-    const verified = await parallel(
-      hi.map((f) => () =>
+    const [verified, dedupe] = await parallel([
+      () => parallel(hi.map((f) => () =>
         agent(verifyPrompt(pr, f), { label: `verify #${pr.number}`, phase: 'Verify', effort: 'high', schema: VERDICT_SCHEMA })
           .then((v) => ({ ...f, verify: v }))
-      )
-    )
+      )),
+      () => (prior.length && findings.length
+        ? agent(dedupePrompt(pr, prior, findings), { label: `dedupe #${pr.number}`, phase: 'Verify', effort: 'high', schema: DEDUPE_SCHEMA })
+        : Promise.resolve({ duplicates: [] })),
+    ])
     const lows = findings.filter((f) => f.severity !== 'critical' && f.severity !== 'high').map((f) => ({ ...f, verify: null }))
-    const kept = [...verified.filter(Boolean), ...lows].filter((f) => !f.verify || f.verify.verdict !== 'REFUTED')
+    const survived = [...(verified || []).filter(Boolean), ...lows].filter((f) => !f.verify || f.verify.verdict !== 'REFUTED')
       .map((f) => (f.verify && f.verify.corrected_severity ? { ...f, severity: f.verify.corrected_severity } : f))
+
+    // drop findings the last round already raised — the thread reply covers them
+    const dupes = new Map(((dedupe && dedupe.duplicates) || []).map((d) => [findings[d.index] && `${findings[d.index].file}:${findings[d.index].line}`, d]))
+    const dropped = [], kept = []
+    for (const f of survived) {
+      const d = dupes.get(`${f.file}:${f.line}`)
+      if (d) dropped.push({ comment: f.comment, thread_id: d.thread_id, reason: d.reason })
+      else kept.push(f)
+    }
     const rank = { critical: 0, high: 1, medium: 2, low: 3 }
     kept.sort((a, b) => (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9))
-    const rec = recommend(kept)
+
+    const rec = recommend(kept, prior)
+    const replies = prior.filter((t) => t.reply && t.reply.trim())
+    const written = await agent(bodyPrompt(pr, rec, kept, prior), { label: `summarize #${pr.number}`, phase: 'Summarize', schema: BODY_SCHEMA })
     const counts = ['critical', 'high', 'medium', 'low'].map((s) => `${kept.filter((f) => f.severity === s).length} ${s}`).filter((x) => !x.startsWith('0')).join(', ')
+    const acked = prior.filter((t) => t.status === 'fixed').length
     return {
       pr: pr.number, repo: pr.repo, title: pr.title,
       brief: brief || null,
       recommendation: rec,
-      summary: kept.length ? `${counts} — inline.` : 'Looks good.',
+      summary: [
+        kept.length ? `${counts} new — inline.` : 'Nothing new.',
+        prior.length ? `${acked}/${prior.length} from last round fixed.` : null,
+        dropped.length ? `${dropped.length} repeat(s) folded into existing threads.` : null,
+      ].filter(Boolean).join(' '),
+      body: (written && written.body) || `Recommend: ${rec.replace('_', ' ')}. ${kept.length ? `${counts} new — inline.` : 'Nothing new.'}`,
       comments: kept.map((f) => ({ path: f.file, line: f.line, body: f.comment, severity: f.severity })),
+      replies: replies.map((t) => ({ thread_id: t.thread_id, body: t.reply, resolve: !!t.resolve, status: t.status, gist: t.gist, path: t.path })),
+      dropped,
       bodyOnly: [],
     }
   }
