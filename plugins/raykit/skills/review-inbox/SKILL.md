@@ -66,24 +66,47 @@ Workflow({ scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/pr-principal-review.js",
 
 It fans out reviewers by dimension (1 for small PRs, ~3 for medium, ~6 + verify for large),
 adversarially verifies every high/critical, and returns per PR:
-`{ pr, repo, brief, recommendation, summary, comments:[{path,line,body,severity}], bodyOnly }`.
-Comments come back already terse and in a human voice — post them verbatim.
 
-`brief` is the orientation pass — `{ purpose, mechanism, ticket, affects, gaps }` — written for
-someone who has never seen the work. It runs concurrently with the review, so it's free. Use it
-for step 6; **never** put it in the posted review body (see step 4).
+```
+{ pr, repo, brief, recommendation, summary, body,
+  comments: [{path,line,body,severity}],       // NEW findings only
+  replies:  [{thread_id,body,resolve,status,gist,path}],   // your last round, re-judged
+  dropped:  [{comment,thread_id,reason}] }     // repeats folded into existing threads
+```
+
+Comments and replies come back already terse and in a human voice — post them verbatim.
+
+- `brief` is the orientation pass — `{ purpose, mechanism, ticket, affects, gaps }` — written for
+  someone who has never seen the work. Use it for step 6; **never** put it in the posted review
+  body (see step 4).
+- `body` is the submit-ready review summary, opening with the recommendation. Post it as-is.
+- `replies` only appears on a re-review. Each entry is one of your own earlier threads, re-judged
+  against the current code: `fixed` (ack + resolve), `partial` (they changed it and it's still
+  broken), `not_fixed`, `stale`. The workflow verifies rather than trusting the author's
+  resolution, and skips threads you already answered in a prior round.
+- `dropped` is findings this round that repeat an existing thread. They're already accounted for by
+  that thread's reply — don't post them, but do mention the count in step 6.
 
 ## 4. Post one PENDING review per PR
 
-For each result, build the payload and POST with **no `event` field** (that keeps it pending):
+Order matters: the review must exist before replies can be staged into it.
+
+### 4a. Create the pending review with the new findings
+
+POST with **no `event` field** — that's what keeps it pending:
 
 ```
-# payload.json: {"body": "<summary>", "comments":[{"path","line","side":"RIGHT","body"}, ...]}
-gh api --method POST repos/<owner/repo>/pulls/<n>/reviews --input payload.json
+# payload.json: {"body": "<result.body>", "comments":[{"path","line","side":"RIGHT","body"}, ...]}
+gh api --method POST repos/<owner/repo>/pulls/<n>/reviews --input payload.json -q '.id, .node_id'
 ```
 
-- Set the review `body` to the workflow's `summary` plus the recommendation, e.g.
-  `Recommend: request changes. 2 high, 3 medium — inline.`
+Keep the `node_id` (`PRR_…`) — 4b needs it.
+
+- Use the workflow's `body` verbatim. It already opens with the recommendation, which matters
+  because **GitHub cannot preselect the approve / request-changes radio** — `event` only exists at
+  submit time, and submitting is exactly what this skill never does. The body is the only prefill
+  available, so it carries the verdict as text.
+- `comments` is `result.comments` only. Never re-post anything in `dropped`.
 - Keep `brief` out of the review entirely. It's your orientation, and the author does not need you
   explaining their own PR back to them — a pending review becomes visible to them the moment you
   submit it.
@@ -94,6 +117,38 @@ gh api --method POST repos/<owner/repo>/pulls/<n>/reviews --input payload.json
 - If the POST returns 422 `lock prevents review`, the PR's conversation is locked — skip it
   and note it in the summary; don't retry.
 - Only one pending review per PR is allowed; the step-2 guard prevents duplicates.
+
+### 4b. Stage the replies on your earlier threads (re-review only)
+
+For each entry in `result.replies`, stage a reply **into the pending review** so it stays
+author-invisible until you submit. This only works over GraphQL — REST cannot do it
+(`POST /pulls/{n}/comments` with `in_reply_to` publishes immediately, and the reviews endpoint
+rejects `inReplyTo` outright: `DraftPullRequestReviewComment` has no such field):
+
+```
+gh api graphql -f query='
+mutation($review:ID!,$thread:ID!,$body:String!){
+  addPullRequestReviewThreadReply(input:{
+    pullRequestReviewId:$review, pullRequestReviewThreadId:$thread, body:$body
+  }){ comment{ state } } }' \
+  -f review="<PRR_… from 4a>" -f thread="<reply.thread_id>" -f body="<reply.body>"
+```
+
+Expect `state: PENDING`. If it comes back anything else, stop and say so — something published.
+
+### 4c. Resolve the threads that are genuinely fixed
+
+For each reply with `resolve: true`:
+
+```
+gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}' -f t="<thread_id>"
+```
+
+**This one is immediate** — resolution can't be staged, so it's visible to the author before you
+submit. It's the single sanctioned exception to author-invisibility, and only ever on threads the
+workflow verified as fixed in the current code. Never resolve a `partial`/`not_fixed` thread, and
+never unresolve one the author closed — a `partial` reply sits on the resolved thread and is
+surfaced to you in step 6 instead.
 
 ## 5. Open the reviewed PRs for the human to sign off
 
@@ -122,10 +177,19 @@ Then print the real output — a rundown per PR, in this order:
    field labels. Add the `ticket` as a link if there is one. This comes first because the
    recommendation is meaningless until you know what the change is trying to do.
 3. **What it touches** — `brief.affects`, so the weight of the findings is obvious.
-4. **Recommendation** — approve / comment / request changes, plus the severity counts.
-5. **The findings** — the substance of each inline comment, grouped or clustered if there are many.
-   Don't just report counts; the point is that they can judge the calls without opening the diff.
-6. **Worth asking the author** — `brief.gaps`, if non-empty. Flag it as a question, not a finding;
+4. **Recommendation** — always print it explicitly per PR: approve / comment / request changes,
+   plus the severity counts. You have to click that radio yourself at submit time, so this line is
+   the only place you'll see the call before you do — never leave it implicit or roll it up across
+   PRs.
+5. **Since last round** (re-review only) — what got fixed, as a count plus a one-liner. Then, one
+   by one, every `partial` and `not_fixed`: those are the ones where the author believes they're
+   done and they aren't, so they need the most words. Say which of them are sitting on threads the
+   author already resolved.
+6. **The findings** — the substance of each *new* inline comment, grouped or clustered if there are
+   many. Don't just report counts; the point is that they can judge the calls without opening the
+   diff. Note the `dropped` count so it's clear repeats were folded into existing threads rather
+   than lost.
+7. **Worth asking the author** — `brief.gaps`, if non-empty. Flag it as a question, not a finding;
    it isn't in the posted review.
 
 Keep it skimmable and factual. If a brief came back empty (`brief: null`), say the context pass
@@ -145,4 +209,10 @@ If nothing was eligible, send nothing (or a quiet "review queue clear").
   To also ignore specific *active* repos, keep a short ignore-list of `owner/name`s and drop them
   in step 1.
 - Requires `gh` authenticated as the reviewing user.
-- Never `--no-verify`, never submit reviews, never post to PR authors.
+- Never `--no-verify`, never submit reviews, never post visible comments to PR authors. Resolving a
+  verified-fixed thread (4c) is the one immediate action, because GitHub has no pending equivalent.
+- What can and can't be staged, established by probing the API — don't re-litigate it:
+  a new inline comment can (REST), a reply on an existing thread can (GraphQL only), resolving a
+  thread cannot, and the approve/request-changes choice cannot.
+- Deleting a pending review deletes its staged replies with it, so a re-run is clean: drop the
+  pending review and rebuild rather than trying to patch it.
