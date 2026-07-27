@@ -25,6 +25,19 @@ ME=$(gh api user -q .login)
 `gh` sometimes fails in a sandbox with a TLS cert error (`OSStatus -26276`). If a `gh`
 call fails that way, rerun it with the sandbox disabled.
 
+**An error from a review-mutating call does not mean nothing happened.** `PUT` and `DELETE` against
+`/pulls/{n}/reviews/{id}` have both been observed returning `404 Not Found` while *submitting the
+pending review* — published to the author, body silently dropped. So:
+
+- Treat any non-2xx from a write as **unknown**, never as "no effect". Re-read
+  `gh api repos/<owner/repo>/pulls/<n>/reviews` and check the state before you do anything else.
+- Never retry or "fix up" after such an error until you've re-read state; the retry is what turns one
+  stray publish into two.
+- Never probe or experiment against a write endpoint on someone else's PR. If you need to learn how
+  an endpoint behaves, do it on a draft PR you own, then come back.
+- There is no unsubmit. A published review can only be deleted comment by comment, and the author
+  has already been notified — so the cost of guessing here is unrecoverable.
+
 ## 1. Discover the queue
 
 ```
