@@ -235,14 +235,20 @@ New findings this round (${kept.length}), already posted inline:
 ${JSON.stringify(kept.map((f) => ({ severity: f.severity, file: f.file, line: f.line, comment: f.comment })), null, 1)}
 ${prior.length ? `
 This is a re-review. Confirmed fixed since last round (${acked.length}): ${JSON.stringify(acked.map((t) => t.gist))}
-Still open from last round (${open.length}): ${JSON.stringify(open.map((t) => ({ status: t.status, gist: t.gist })))}` : ''}
+Still open from last round (${open.length}): ${JSON.stringify(open.map((t) => ({ status: t.status, gist: t.gist })))}` : `
+This is a FIRST review — you have no earlier threads on this PR. Credit nothing as "fixed",
+"addressed", or "in", and do not thank them for changes: you have no record of asking for any. The
+PR description may describe responding to review elsewhere; that is not your round and you have not
+verified it. Write it as a first look, full stop.`}
 
 Rules:
 - Open with the verdict in your own words — GitHub cannot preselect the approve/request-changes
   radio, so the body has to carry it. One short line.
-- If this is a re-review, credit what got fixed BEFORE the new problems, in one line, aggregate
-  ("all five from last round are in — one guard landed with the wrong predicate, see the thread").
-  Do not enumerate what's already visible on the threads.
+- If and only if this is a re-review, credit what got fixed BEFORE the new problems, in one line,
+  aggregate ("all five from last round are in — one guard landed with the wrong predicate, see the
+  thread"). Do not enumerate what's already visible on the threads. Never credit a fix that isn't
+  in the confirmed-fixed list above, and never credit one whose defect the new findings still
+  report — that contradiction is worse than saying nothing.
 - Then the shape of what's new: the pattern the findings share, not a list of them. They're inline;
   the body says why they add up to this verdict.
 - ${STYLE.replace('every comment', 'this body').replace('inline note', 'review summary')}
