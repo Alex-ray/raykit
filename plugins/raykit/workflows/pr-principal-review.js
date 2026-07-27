@@ -23,6 +23,8 @@ const PRECOMPUTED = (!Array.isArray(args) && args && args.findings) || {}
 
 const STYLE = `Write every comment the way a senior engineer drops an inline note: direct, minimal, human — indistinguishable from a person. State the concern in as few words as convey it, add the fix only if it isn't obvious. No severity labels, no "Failure:/Fix:" scaffolding, no preamble, and NEVER any footer about being automated or AI-generated. One to two sentences. Reference the exact symbol/line inline (it's already anchored).`
 
+const BODY_STYLE = `Same voice as the inline comments: direct, minimal, human — indistinguishable from a person. No headings, no severity labels, no preamble, no sign-off, and NEVER any footer about being automated or AI-generated. Prose, not bullets, unless there are genuinely 3+ unrelated clusters. 2-5 sentences.`
+
 const FINDINGS_SCHEMA = {
   type: 'object', additionalProperties: false,
   required: ['findings'],
@@ -230,6 +232,24 @@ function bodyPrompt(pr, rec, kept, prior) {
   return `Write the review body for PR #${pr.number} in ${pr.repo} — the text that lands in GitHub's
 "Finish your review" box. It gets submitted as-is, so write it to be sendable with no editing.
 
+WHAT THIS TEXT IS FOR — hold to this, it's the whole spec:
+The body is the overview of the review you are submitting. Its job is to tell the author what the
+inline comments ADD UP TO, and to carry the things that have no line to sit on. That's it.
+
+Belongs in the body:
+- the verdict, and what it would take to clear it
+- the pattern across the findings — one root assumption, one repeated omission, one theme
+- anything that isn't anchorable: a missing file, work that isn't in the diff, a description that
+  contradicts the code, coverage that went down, a cross-cutting design concern
+- on a re-review, the state of the previous round
+
+Does NOT belong in the body:
+- anything that could have been an inline comment. If it names a specific line and could be
+  anchored there, it is an inline comment — it is ALREADY posted as one, and repeating it here
+  makes the author read it twice. Do not restate, summarize, or list the individual findings.
+- counts and severity tallies (the reviewer sees those; the author doesn't need them)
+- praise padding, next steps, or anything performative
+
 Recommendation: ${rec.replace('_', ' ')}
 New findings this round (${kept.length}), already posted inline:
 ${JSON.stringify(kept.map((f) => ({ severity: f.severity, file: f.file, line: f.line, comment: f.comment })), null, 1)}
@@ -250,10 +270,11 @@ Rules:
   in the confirmed-fixed list above, and never credit one whose defect the new findings still
   report — that contradiction is worse than saying nothing.
 - Then the shape of what's new: the pattern the findings share, not a list of them. They're inline;
-  the body says why they add up to this verdict.
-- ${STYLE.replace('every comment', 'this body').replace('inline note', 'review summary')}
-- No headings, no bullet lists unless there are genuinely 3+ unrelated clusters. 2-5 sentences.
-- Never mention being automated or AI-generated.
+  the body says why they add up to this verdict. If the findings share no pattern, say that plainly
+  and stop — a short body is correct, padding it is not.
+- The inline comments are given to you above ONLY so you can characterize them. Naming one or two as
+  the clearest instance of a shared pattern is fine; walking the list is not.
+- ${BODY_STYLE}
 
 Return via the structured tool.`
 }

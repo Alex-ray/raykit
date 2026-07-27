@@ -106,6 +106,11 @@ Keep the `node_id` (`PRR_…`) — 4b needs it.
   because **GitHub cannot preselect the approve / request-changes radio** — `event` only exists at
   submit time, and submitting is exactly what this skill never does. The body is the only prefill
   available, so it carries the verdict as text.
+- The body is the **overview of the review being submitted**: the verdict, the pattern the findings
+  add up to, and anything with no line to sit on (work missing from the diff, a description that
+  contradicts the code, coverage that dropped, a cross-cutting concern). Anything that could be
+  anchored to a line is an inline comment and is already posted as one — it must not be restated
+  here. If you find yourself pasting findings into the body, that's the wrong place for them.
 - `comments` is `result.comments` only. Never re-post anything in `dropped`.
 - Keep `brief` out of the review entirely. It's your orientation, and the author does not need you
   explaining their own PR back to them — a pending review becomes visible to them the moment you
@@ -191,6 +196,11 @@ Then print the real output — a rundown per PR, in this order:
    than lost.
 7. **Worth asking the author** — `brief.gaps`, if non-empty. Flag it as a question, not a finding;
    it isn't in the posted review.
+8. **The review comment you'll be submitting** — print `result.body` verbatim, quoted, so it's
+   obvious it's the staged text and not your narration. This is the one thing that goes out under
+   your name the instant you hit submit, so you get to read it before that, not after. Don't
+   paraphrase it and don't silently rewrite it; if it reads wrong, say so and fix it on the review
+   (step 4a's payload) rather than only in the printout.
 
 Keep it skimmable and factual. If a brief came back empty (`brief: null`), say the context pass
 failed for that PR rather than inventing a purpose from the title. Do **not** submit anything.
