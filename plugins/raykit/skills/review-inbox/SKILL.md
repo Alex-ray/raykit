@@ -225,4 +225,7 @@ If nothing was eligible, send nothing (or a quiet "review queue clear").
   a new inline comment can (REST), a reply on an existing thread can (GraphQL only), resolving a
   thread cannot, and the approve/request-changes choice cannot.
 - Deleting a pending review deletes its staged replies with it, so a re-run is clean: drop the
-  pending review and rebuild rather than trying to patch it.
+  pending review and rebuild rather than trying to patch it. You have to rebuild anyway — a pending
+  review's body cannot be edited (`PUT /pulls/{n}/reviews/{id}` 404s until it's submitted), so
+  changing the body means delete, re-create, and re-stage the replies (4a→4c again). Resolves from a
+  previous attempt are already applied and are idempotent; don't redo them.
