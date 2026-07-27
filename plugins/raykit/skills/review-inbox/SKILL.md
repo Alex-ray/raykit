@@ -4,8 +4,9 @@ description: >
   Monitor and review the PRs you're tagged on. Discovers open, non-draft PRs where
   the current user is a requested reviewer (across all repos), runs the principal-engineer
   review workflow (depth scaled to size, adversarially verified), posts a terse, human-voice
-  PENDING review per PR (author-only — never submitted), and notifies with an
-  approve / request-changes / comment recommendation. Trigger: "/raykit:review-inbox", "review my PRs",
+  PENDING review per PR (author-only — never submitted), and briefs you on what each PR is
+  for alongside an approve / request-changes / comment recommendation.
+  Trigger: "/raykit:review-inbox", "review my PRs",
   "check my review queue", or on a schedule.
 ---
 
@@ -65,8 +66,12 @@ Workflow({ scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/pr-principal-review.js",
 
 It fans out reviewers by dimension (1 for small PRs, ~3 for medium, ~6 + verify for large),
 adversarially verifies every high/critical, and returns per PR:
-`{ pr, repo, recommendation, summary, comments:[{path,line,body,severity}], bodyOnly }`.
+`{ pr, repo, brief, recommendation, summary, comments:[{path,line,body,severity}], bodyOnly }`.
 Comments come back already terse and in a human voice — post them verbatim.
+
+`brief` is the orientation pass — `{ purpose, mechanism, ticket, affects, gaps }` — written for
+someone who has never seen the work. It runs concurrently with the review, so it's free. Use it
+for step 6; **never** put it in the posted review body (see step 4).
 
 ## 4. Post one PENDING review per PR
 
@@ -79,6 +84,9 @@ gh api --method POST repos/<owner/repo>/pulls/<n>/reviews --input payload.json
 
 - Set the review `body` to the workflow's `summary` plus the recommendation, e.g.
   `Recommend: request changes. 2 high, 3 medium — inline.`
+- Keep `brief` out of the review entirely. It's your orientation, and the author does not need you
+  explaining their own PR back to them — a pending review becomes visible to them the moment you
+  submit it.
 - Comments must anchor to lines in the diff (the workflow only emits in-diff lines). If a
   POST 422s on a comment, move that comment into the review `body` instead and retry.
 - If a PR's diff is empty (stale-base / conflicting), post the findings as the review `body`
@@ -99,16 +107,30 @@ open "https://github.com/<owner/repo>/pull/<n>/files"     # macOS
 
 On non-macOS, print the URLs instead. Skip PRs that were skipped or blocked (e.g. locked).
 
-## 6. Notify
+## 6. Brief the human
 
-Send one push notification summarizing the run, then also print the same summary:
+Send one push notification summarizing the run:
 
 ```
 PushNotification: "Reviewed N PR(s): #x request-changes, #y comment, #z approve. Pending — submit when ready."
 ```
 
-Per PR, include: repo, number, title, recommendation, and the one-line summary. Do **not**
-submit anything. If nothing was eligible, send nothing (or a quiet "review queue clear").
+Then print the real output — a rundown per PR, in this order:
+
+1. **Heading** — repo, number, title, size (`additions+`, N files), and the PR URL.
+2. **What it's for** — `brief.purpose`, then `brief.mechanism`. Plain prose, your own words, no
+   field labels. Add the `ticket` as a link if there is one. This comes first because the
+   recommendation is meaningless until you know what the change is trying to do.
+3. **What it touches** — `brief.affects`, so the weight of the findings is obvious.
+4. **Recommendation** — approve / comment / request changes, plus the severity counts.
+5. **The findings** — the substance of each inline comment, grouped or clustered if there are many.
+   Don't just report counts; the point is that they can judge the calls without opening the diff.
+6. **Worth asking the author** — `brief.gaps`, if non-empty. Flag it as a question, not a finding;
+   it isn't in the posted review.
+
+Keep it skimmable and factual. If a brief came back empty (`brief: null`), say the context pass
+failed for that PR rather than inventing a purpose from the title. Do **not** submit anything.
+If nothing was eligible, send nothing (or a quiet "review queue clear").
 
 ## Recommendation rubric (the workflow computes this; surface it)
 
